@@ -1,0 +1,147 @@
+trigger:
+- main
+pool:
+ vmImage: ubuntu-latest
+variables:
+  imageName: 'pipelines-docker'
+  DOCKER_BUILDKIT: 1
+stages: 
+# This stage helps to install Terraform and provision resources
+- stage: GoLangTerraform
+  displayName: "Deploy IAC code"
+  jobs:
+  - job:
+    displayName: 'Terraform validation'
+    steps:
+      - checkout: self
+      # - task: TerraformInstaller@0
+      #   continueOnError: false
+      #   displayName: Install Terraform
+      #   inputs:
+      #     terraformVersion: 'latest'
+      - task: ms-devlabs.custom-terraform-tasks.custom-terraform-installer-task.TerraformInstaller@0
+        inputs:
+          terraformVersion: 'latest'
+      - task: DownloadSecureFile@1
+        continueOnError: false
+        name: terraformrc
+        displayName: "Download terraform.rc config file for CLI"
+        inputs:
+          secureFile: "terraform.rc"
+      - task: CmdLine@2
+        displayName: Terraform init
+        inputs:
+          script: terraform init -upgrade
+          workingDirectory: '$(Build.Repository.LocalPath)/modules/main-prod'
+        env:
+          TF_CLI_CONFIG_FILE: $(terraformrc.secureFilePath)
+      - task: CmdLine@2
+        displayName: Terraform validate
+        inputs:
+          script: terraform validate
+          workingDirectory: '$(Build.Repository.LocalPath)/modules/main-prod'
+        env:
+          TF_CLI_CONFIG_FILE: $(terraformrc.secureFilePath)
+      - task: CmdLine@2
+        displayName: Terraform plan
+        inputs:
+          script: terraform plan
+          workingDirectory: '$(Build.Repository.LocalPath)/modules/main-prod'
+        env:
+          TF_CLI_CONFIG_FILE: $(terraformrc.secureFilePath)
+      - task: CmdLine@2
+        displayName: Terraform apply
+        inputs:
+          script: 'terraform apply'
+          workingDirectory: '$(Build.Repository.LocalPath)/modules/main-prod'
+        env:
+          TF_CLI_CONFIG_FILE: $(terraformrc.secureFilePath)
+# This stage helps to install Docker and run Dockerfile and push image to container registry    
+- stage: "Install_Docker_to_the_Container"
+  jobs:
+  - job: Install_Docker    
+    steps:
+      - task: DockerInstaller@0
+        inputs:
+          dockerVersion: '17.09.0-ce'
+
+  - job: Docker_Build    
+    steps:       
+      - task: Docker@2
+        inputs:
+          command: 'build'
+          Dockerfile: 'Dockerfile'
+  - job: Docker_Push    
+    steps:       
+      - task: DockerCompose@0
+        inputs:
+          containerregistrytype: 'Azure Container Registry'
+          azureContainerRegistry: 'Go_containerRegistry'
+          dockerComposeFile: '.circleci/config.yml'
+          action: 'Push services'
+
+# Below Jobs will Build the application code and create an Artifact in the Azure Pipeline
+- stage: "Build_Go_App"
+  jobs:
+  - job: Build_Go
+    steps: 
+    - task: GoTool@0
+      inputs:
+        version: '1.13.5'
+    - task: Go@0
+      inputs:
+        command: 'get'
+        arguments: '-d'
+        workingDirectory: '$(System.DefaultWorkingDirectory)'
+    - task: Go@0
+      inputs:
+        command: 'build'
+        workingDirectory: '$(System.DefaultWorkingDirectory)'
+
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'GoApp'
+        publishLocation: 'Container'
+
+# Below Jobs will run the deployment of the application into Azure container Registry
+- stage: "Deploy_Go_App"
+  jobs:
+  - job: Deploy_Go
+    steps:
+    - task: DownloadPipelineArtifact@2
+      inputs:
+        buildType: 'current'
+        artifactName: 'GoApp'
+        targetPath: '$(Pipeline.Workspace)'
+    
+    - task: AzureKeyVault@2
+      inputs:
+        azureSubscription: 'Sreenu-Test-service-connection'
+        KeyVaultName: 'Go_kv_AUE'
+        SecretsFilter: '*'
+        RunAsPreJob: false
+    
+    - task: AzureWebAppContainer@1
+      inputs:
+        azureSubscription: 'Sreenu-Test-service-connection'
+        AppName: 'GoApp'
+        deployToSlotOrASE: true
+        ResourceGroupName: 'GOIAC'
+        SlotName: Go-staging
+        packageForLinux: '$(System.DefaultWorkingDirectory)'
+        containers: 'Go_containerRegistry'
+        # enableCustomDeployment: true
+        # RemoveAdditionalFilesFlag: true
+    - task: AzureCLI@2
+      displayName: 'Create Postgres Database'
+      inputs:
+        azureSubscription: 'Sreenu-Test-service-connection'
+        scriptType: 'ps'
+        scriptLocation: './TechChallengeApp updatedb'
+    - task: AzureCLI@2
+      displayName: 'Start Serving Request'
+      inputs:
+        azureSubscription: 'Sreenu-Test-service-connection'
+        scriptType: 'ps'
+        scriptLocation: './TechChallengeApp start'
