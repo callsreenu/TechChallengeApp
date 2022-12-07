@@ -18,14 +18,14 @@ COPY . .
 
 RUN go mod tidy
 
-RUN CGO_ENABLED="0" GOARCH=${arch} go build -ldflags="-s -w" -a -o /TechChallengeApp
+RUN CGO_ENABLED="0" GOARCH=amd64 go build -ldflags="-s -w" -a -o /TechChallengeApp
 RUN swagger generate spec -o /swagger.json \
  && cp /swagger.json ui/assets/swagger/ \
  && cp -R /tmp/swagger/dist/* ui/assets/swagger
 
 RUN cd ui && rice append --exec /TechChallengeApp
 
-FROM --platform=linux/${arch} alpine:latest
+FROM --platform=linux/amd64 alpine:latest
 
 WORKDIR /TechChallengeApp
 
