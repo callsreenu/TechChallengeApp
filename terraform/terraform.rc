@@ -1,0 +1,7 @@
+{
+  "credentials": {
+    "sreenu.terraform.io": {
+      "token": "#{token}"
+    }
+  }
+}
